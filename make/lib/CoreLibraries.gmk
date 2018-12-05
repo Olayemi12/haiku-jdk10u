@@ -117,7 +117,9 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBVERIFY, \
     MAPFILE := $(TOPDIR)/make/mapfiles/libverify/mapfile-vers, \
     LDFLAGS := $(LDFLAGS_JDKLIB) \
         $(call SET_SHARED_LIBRARY_ORIGIN), \
-    LIBS_unix := -ljvm -lc, \
+    LIBS_unix := -ljvm, \
+    LIBS_solaris := -lc, \
+    LIBS_linux := -lc, \
     LIBS_windows := jvm.lib, \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
@@ -170,6 +172,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJAVA, \
     LDFLAGS := $(LDFLAGS_JDKLIB) \
         $(call SET_SHARED_LIBRARY_ORIGIN), \
     LDFLAGS_macosx := -L$(SUPPORT_OUTPUTDIR)/native/$(MODULE)/, \
+    LDFLAGS_haiku := $(BUILD_LIBFDLIBM) -lbe, \
     LDFLAGS_windows := -export:winFileHandleOpen -export:handleLseek \
         -export:getLastErrorString \
         -export:getErrorString -delayload:shell32.dll, \
@@ -181,6 +184,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJAVA, \
         -framework CoreFoundation \
         -framework Foundation \
         -framework Security -framework SystemConfiguration, \
+    LIBS_haiku := -lnetwork $(BUILD_LIBFDLIBM),\
     LIBS_windows := jvm.lib $(BUILD_LIBFDLIBM) $(WIN_VERIFY_LIB) \
         shell32.lib delayimp.lib \
         advapi32.lib version.lib, \
@@ -238,6 +242,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBZIP, \
         -export:ZIP_InflateFully -export:ZIP_CRC32 -export:ZIP_FreeEntry, \
     LIBS_unix := -ljvm -ljava $(LIBZ), \
     LIBS_solaris := -lc, \
+    LIBS_haiku := $(LIBZ) -ljava -ljvm, \
     LIBS_windows := jvm.lib $(WIN_JAVA_LIB), \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
@@ -278,8 +283,10 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJIMAGE, \
         -export:JIMAGE_PackageToModule \
         -export:JIMAGE_FindResource -export:JIMAGE_GetResource \
         -export:JIMAGE_ResourceIterator -export:JIMAGE_ResourcePath, \
-    LIBS_unix := -ljvm -ldl $(LIBCXX), \
-    LIBS_solaris := -lc, \
+    LIBS_unix := -ljvm $(LIBCXX), \
+    LIBS_linux := -ldl, \
+    LIBS_solaris := -ldl -lc, \
+    LIBS_aix := -ldl, \
     LIBS_macosx := -lc++, \
     LIBS_windows := jvm.lib, \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
@@ -324,6 +331,10 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
   BUILD_LIBJLI_STATIC_java_md_macosx.c_CFLAGS := -x objective-c
 
   LIBJLI_CFLAGS += -DPACKAGE_PATH=\"$(PACKAGE_PATH)\"
+endif
+
+ifeq ($(OPENJDK_TARGET_OS), haiku)
+  LIBJAVA_EXCLUDE_FILES += TimeZone_md.c
 endif
 
 ifeq ($(OPENJDK_TARGET_OS), windows)
@@ -395,6 +406,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJLI, \
     LIBS_solaris := $(LIBDL) -lc, \
     LIBS_aix := $(LIBDL),\
     LIBS_macosx := -framework Cocoa -framework Security -framework ApplicationServices, \
+    LIBS_haiku := $(LIBZ), \
     LIBS_windows := advapi32.lib comctl32.lib user32.lib, \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
