@@ -375,7 +375,7 @@ void os::Posix::print_rlimit_info(outputStream* st) {
 #if defined(AIX)
   st->print(", NPROC ");
   st->print("%d", sysconf(_SC_CHILD_MAX));
-#elif !defined(SOLARIS)
+#elif !defined(SOLARIS) && !defined(HAIKU)
   st->print(", NPROC ");
   getrlimit(RLIMIT_NPROC, &rlim);
   if (rlim.rlim_cur == RLIM_INFINITY) st->print("infinity");
