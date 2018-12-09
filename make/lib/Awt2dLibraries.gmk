@@ -915,8 +915,8 @@ ifeq ($(ENABLE_HEADLESS_ONLY), false)
     LIBSPLASHSCREEN_CFLAGS += -DWITH_WIN32
   else ifeq ($(OPENJDK_TARGET_OS), haiku)
     LIBSPLASHSCREEN_CFLAGS += -DWITH_HAIKU \
-        -I$(JDK_TOPDIR)/src/java.desktop/haiku/native/sun/awt/splashscreen \
-        -I$(JDK_TOPDIR)/src/java.desktop/haiku/native/libhaikuapp
+        -I$(TOPDIR)/src/java.desktop/haiku/native/sun/awt/splashscreen \
+        -I$(TOPDIR)/src/java.desktop/haiku/native/libhaikuapp
   else
     LIBSPLASHSCREEN_CFLAGS += -DWITH_X11 $(X_CFLAGS)
   endif
@@ -1105,9 +1105,9 @@ ifeq ($(OPENJDK_TARGET_OS), haiku)
       AccelGlyphCache.c
 
   LIBAWT_LWAWT_DIRS := \
-      $(JDK_TOPDIR)/src/java.desktop/haiku/native/libawt_lwawt/awt \
-      $(JDK_TOPDIR)/src/java.desktop/haiku/native/libawt_lwawt/font \
-      $(JDK_TOPDIR)/src/java.desktop/share/native/common/font
+      $(TOPDIR)/src/java.desktop/haiku/native/libawt_lwawt/awt \
+      $(TOPDIR)/src/java.desktop/haiku/native/libawt_lwawt/font \
+      $(TOPDIR)/src/java.desktop/share/native/common/font
 
   $(eval $(call SetupNativeCompilation,BUILD_LIBAWT_LWAWT, \
       LIBRARY := awt_lwawt, \
@@ -1120,17 +1120,17 @@ ifeq ($(OPENJDK_TARGET_OS), haiku)
       CFLAGS := $(CFLAGS_JDKLIB) \
           $(foreach dir, $(LIBAWT_LWAWT_DIRS), -I$(dir)) \
           -I$(SUPPORT_OUTPUTDIR)/headers/java.desktop \
-          -I$(JDK_TOPDIR)/src/java.desktop/haiku/native/include \
-          -I$(JDK_TOPDIR)/src/java.desktop/haiku/native/libhaikuapp \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/common/java2d \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/common/java2d \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/common/awt/debug \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/include \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/libawt/awt/image \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/libawt/awt/image/cvutils \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/libawt/java2d/loops \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/libawt/java2d/pipe \
-          -I$(JDK_TOPDIR)/src/java.desktop/share/native/libawt/java2d, \
+          -I$(TOPDIR)/src/java.desktop/haiku/native/include \
+          -I$(TOPDIR)/src/java.desktop/haiku/native/libhaikuapp \
+          -I$(TOPDIR)/src/java.desktop/share/native/common/java2d \
+          -I$(TOPDIR)/src/java.desktop/share/native/common/java2d \
+          -I$(TOPDIR)/src/java.desktop/share/native/common/awt/debug \
+          -I$(TOPDIR)/src/java.desktop/share/native/include \
+          -I$(TOPDIR)/src/java.desktop/share/native/libawt/awt/image \
+          -I$(TOPDIR)/src/java.desktop/share/native/libawt/awt/image/cvutils \
+          -I$(TOPDIR)/src/java.desktop/share/native/libawt/java2d/loops \
+          -I$(TOPDIR)/src/java.desktop/share/native/libawt/java2d/pipe \
+          -I$(TOPDIR)/src/java.desktop/share/native/libawt/java2d, \
       LDFLAGS := $(LDFLAGS_JDKLIB) \
           $(call SET_SHARED_LIBRARY_ORIGIN) \
           -L$(INSTALL_LIBRARIES_HERE), \
@@ -1139,7 +1139,7 @@ ifeq ($(OPENJDK_TARGET_OS), haiku)
       OBJECT_DIR := $(JDK_OUTPUTDIR)/objs/libawt_lwawt, \
       DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
 
-  BUILD_LIBRARIES += $(BUILD_LIBAWT_LWAWT)
+  TARGETS += $(BUILD_LIBAWT_LWAWT)
 
   $(BUILD_LIBAWT_LWAWT): $(BUILD_LIBAWT)
 
@@ -1147,7 +1147,7 @@ ifeq ($(OPENJDK_TARGET_OS), haiku)
 
   $(BUILD_LIBAWT_LWAWT): $(BUILD_LIBHAIKUAPP)
 
-  $(BUILD_LIBAWT_LWAWT): $(BUILD_LIBJAVA)
+  $(BUILD_LIBAWT_LWAWT): $(call FindLib, java.base, java)
 
 endif
 

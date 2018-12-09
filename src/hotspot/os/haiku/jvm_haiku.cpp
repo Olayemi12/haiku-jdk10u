@@ -23,7 +23,7 @@
  */
 
 #include "precompiled.hpp"
-#include "prims/jvm.h"
+#include "jvm.h"
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/osThread.hpp"
 
@@ -47,7 +47,6 @@ JVM_ENTRY_NO_ENV(void*, JVM_RegisterSignal(jint sig, void* handler))
                    : handler;
   switch (sig) {
     /* The following are already used by the VM. */
-    case INTERRUPT_SIGNAL:
     case SIGFPE:
     case SIGILL:
     case SIGSEGV:

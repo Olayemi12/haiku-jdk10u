@@ -1160,10 +1160,8 @@ static void mmap_attach_shared(const char* user, int vmid, PerfMemory::PerfMemor
   *addr = mapAddress;
   *sizep = size;
 
-  if (PerfTraceMemOps) {
-    tty->print("mapped " SIZE_FORMAT " bytes for vmid %d at "
-               INTPTR_FORMAT "\n", size, vmid, p2i((void*)mapAddress));
-  }
+  log_debug(perf, memops)("mapped " SIZE_FORMAT " bytes for vmid %d at "
+                          INTPTR_FORMAT "\n", size, vmid, p2i((void*)mapAddress));
 }
 
 

@@ -118,7 +118,7 @@ ifeq ($(OPENJDK_TARGET_OS), haiku)
       -DUSE_DAUDIO=TRUE \
       -DUSE_PLATFORM_MIDI_OUT=TRUE \
       -DUSE_PLATFORM_MIDI_IN=TRUE
-  LIBJSOUND_SRC_DIRS += $(JDK_TOPDIR)/src/java.desktop/haiku/native/libjsound
+  LIBJSOUND_SRC_DIRS += $(TOPDIR)/src/java.desktop/haiku/native/libjsound
   LIBJSOUND_SRC_FILES += \
       PLATFORM_API_HaikuOS_MidiIn.cpp \
       PLATFORM_API_HaikuOS_MidiOut.cpp \

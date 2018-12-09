@@ -57,7 +57,7 @@ ifeq ($(OPENJDK_TARGET_OS), aix)
 endif
 
 ifeq ($(OPENJDK_TARGET_OS), haiku)
-  BUILD_LIBNIO_MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libnio/mapfile-$(OPENJDK_TARGET_OS)
+  BUILD_LIBNIO_MAPFILE := $(TOPDIR)/make/mapfiles/libnio/mapfile-$(OPENJDK_TARGET_OS)
   BUILD_LIBNIO_FILES += \
       InheritedChannel.c \
       NativeThread.c \

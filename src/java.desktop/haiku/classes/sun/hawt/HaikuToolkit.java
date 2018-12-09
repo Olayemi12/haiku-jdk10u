@@ -29,6 +29,7 @@ import java.awt.*;
 import java.awt.datatransfer.*;
 import java.awt.dnd.*;
 import java.awt.dnd.peer.*;
+import java.awt.event.InputEvent;
 import java.awt.font.*;
 import java.awt.im.*;
 import java.awt.im.spi.*;
@@ -264,9 +265,14 @@ public class HaikuToolkit extends LWToolkit {
     }
 
     @Override
-    @SuppressWarnings("deprecation")
+    @Deprecated(since = "10")
     public int getMenuShortcutKeyMask() {
         return Event.ALT_MASK;
+    }
+
+    @Override
+    public int getMenuShortcutKeyMaskEx() {
+        return InputEvent.ALT_DOWN_MASK;
     }
 
     @Override

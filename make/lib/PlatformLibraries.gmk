@@ -64,7 +64,7 @@ endif
 
 ifeq ($(OPENJDK_TARGET_OS), haiku)
 
-  LIBHAIKUAPP_SRC := $(JDK_TOPDIR)/src/java.desktop/haiku/native/libhaikuapp
+  LIBHAIKUAPP_SRC := $(TOPDIR)/src/java.desktop/haiku/native/libhaikuapp
 
   $(eval $(call SetupNativeCompilation,BUILD_LIBHAIKUAPP, \
       LIBRARY := haikuapp, \

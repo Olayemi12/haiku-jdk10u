@@ -39,6 +39,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/poll.h>
+#include "jvm.h"
+#include "net_util.h"
 
 /*
  * Stack allocated by thread when doing blocking operation
@@ -415,8 +417,7 @@ int NET_Poll(struct pollfd *ufds, unsigned int nfds, int timeout) {
  * Auto restarts with adjusted timeout if interrupted by
  * signal other than our wakeup signal.
  */
-int NET_Timeout0(int s, long timeout, long currentTime) {
-    long prevtime = currentTime, newtime;
+int NET_Timeout(JNIEnv *env, int s, long timeout, jlong nanoTimeStamp) {
     struct timeval t, *tp = &t;
     fd_set fds;
     fd_set* fdsp = NULL;
@@ -461,6 +462,8 @@ int NET_Timeout0(int s, long timeout, long currentTime) {
     }
     FD_SET(s, fdsp);
 
+    jlong prevNanoTime = nanoTimeStamp;
+    jlong nanoTimeout = (jlong) timeout * NET_NSEC_PER_MSEC;
     for(;;) {
         int rv;
 
@@ -478,25 +481,21 @@ int NET_Timeout0(int s, long timeout, long currentTime) {
          * has expired return 0 (indicating timeout expired).
          */
         if (rv < 0 && errno == EINTR) {
-            if (timeout > 0) {
-                struct timeval now;
-                gettimeofday(&now, NULL);
-                newtime = now.tv_sec * 1000  +  now.tv_usec / 1000;
-                timeout -= newtime - prevtime;
-                if (timeout <= 0) {
-                    if (allocated != 0)
-                        free(fdsp);
-                    return 0;
-                }
-                prevtime = newtime;
-                t.tv_sec = timeout / 1000;
-                t.tv_usec = (timeout % 1000) * 1000;
+            jlong newNanoTime = JVM_NanoTime(env, 0);
+            nanoTimeout -= newNanoTime - prevNanoTime;
+            if (nanoTimeout < NET_NSEC_PER_MSEC) {
+                if (allocated != 0)
+                    free(fdsp);
+                return 0;
             }
+            prevNanoTime = newNanoTime;
+            t.tv_sec = nanoTimeout / NET_NSEC_PER_SEC;
+            t.tv_usec = (nanoTimeout % NET_NSEC_PER_SEC) / NET_NSEC_PER_USEC;
+
         } else {
             if (allocated != 0)
                 free(fdsp);
             return rv;
         }
-
     }
 }

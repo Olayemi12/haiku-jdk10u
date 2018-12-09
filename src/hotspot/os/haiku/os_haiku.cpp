@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
  */
 
 // no precompiled headers
+#include "jvm.h"
 #include "classfile/classLoader.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
@@ -31,20 +32,19 @@
 #include "compiler/compileBroker.hpp"
 #include "compiler/disassembler.hpp"
 #include "interpreter/interpreter.hpp"
-#include "jvm_haiku.h"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/filemap.hpp"
 #include "oops/oop.inline.hpp"
+#include "os_haiku.inline.hpp"
 #include "os_share_haiku.hpp"
 #include "prims/jniFastGetField.hpp"
-#include "prims/jvm.h"
 #include "prims/jvm_misc.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/extendedPC.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/interfaceSupport.hpp"
-#include "runtime/init.hpp"
 #include "runtime/java.hpp"
 #include "runtime/javaCalls.hpp"
 #include "runtime/mutexLocker.hpp"
@@ -58,6 +58,7 @@
 #include "runtime/thread.inline.hpp"
 #include "runtime/threadCritical.hpp"
 #include "runtime/timer.hpp"
+#include "semaphore_posix.hpp"
 #include "services/attachListener.hpp"
 #include "services/memTracker.hpp"
 #include "services/runtimeService.hpp"
@@ -316,7 +317,7 @@ extern "C" void breakpoint() {
 // signal support
 
 debug_only(static bool signal_sets_initialized = false);
-static sigset_t unblocked_sigs, vm_sigs, allowdebug_blocked_sigs;
+static sigset_t unblocked_sigs, vm_sigs;
 
 bool os::Haiku::is_sig_ignored(int sig) {
       struct sigaction oact;
@@ -346,7 +347,6 @@ void os::Haiku::signal_sets_init() {
   // In reality, though, unblocking these signals is really a nop, since
   // these signals are not blocked by default.
   sigemptyset(&unblocked_sigs);
-  sigemptyset(&allowdebug_blocked_sigs);
   sigaddset(&unblocked_sigs, SIGILL);
   sigaddset(&unblocked_sigs, SIGSEGV);
   sigaddset(&unblocked_sigs, SIGBUS);
@@ -359,15 +359,12 @@ void os::Haiku::signal_sets_init() {
   if (!ReduceSignalUsage) {
    if (!os::Haiku::is_sig_ignored(SHUTDOWN1_SIGNAL)) {
       sigaddset(&unblocked_sigs, SHUTDOWN1_SIGNAL);
-      sigaddset(&allowdebug_blocked_sigs, SHUTDOWN1_SIGNAL);
    }
    if (!os::Haiku::is_sig_ignored(SHUTDOWN2_SIGNAL)) {
       sigaddset(&unblocked_sigs, SHUTDOWN2_SIGNAL);
-      sigaddset(&allowdebug_blocked_sigs, SHUTDOWN2_SIGNAL);
    }
    if (!os::Haiku::is_sig_ignored(SHUTDOWN3_SIGNAL)) {
       sigaddset(&unblocked_sigs, SHUTDOWN3_SIGNAL);
-      sigaddset(&allowdebug_blocked_sigs, SHUTDOWN3_SIGNAL);
    }
   }
   // Fill in signals that are blocked by all but the VM thread.
@@ -390,12 +387,6 @@ sigset_t* os::Haiku::unblocked_signals() {
 sigset_t* os::Haiku::vm_signals() {
   assert(signal_sets_initialized, "Not initialized");
   return &vm_sigs;
-}
-
-// These are signals that are blocked during cond_wait to allow debugger in
-sigset_t* os::Haiku::allowdebug_blocked_signals() {
-  assert(signal_sets_initialized, "Not initialized");
-  return &allowdebug_blocked_sigs;
 }
 
 void os::Haiku::hotspot_sigmask(Thread* thread) {
@@ -617,6 +608,14 @@ void os::free_thread(OSThread* osthread) {
   delete osthread;
 }
 
+//////////////////////////////////////////////////////////////////////////////
+// primordial thread
+
+// Check if current thread is the primordial thread, similar to Solaris thr_main.
+bool os::is_primordial_thread(void) {
+  return find_thread(NULL) == getpid();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // time support
 
@@ -790,61 +789,6 @@ const char* os::dll_file_extension() { return ".so"; }
 // This must be hard coded because it's the system's temporary
 // directory not the java application's temp directory, ala java.io.tmpdir.
 const char* os::get_temp_directory() { return "/tmp"; }
-
-static bool file_exists(const char* filename) {
-  struct stat statbuf;
-  if (filename == NULL || strlen(filename) == 0) {
-    return false;
-  }
-  return os::stat(filename, &statbuf) == 0;
-}
-
-bool os::dll_build_name(char* buffer, size_t buflen,
-                        const char* pname, const char* fname) {
-  bool retval = false;
-  // Copied from libhpi
-  const size_t pnamelen = pname ? strlen(pname) : 0;
-
-  // Return error on buffer overflow.
-  if (pnamelen + strlen(fname) + 10 > (size_t) buflen) {
-    return retval;
-  }
-
-  if (pnamelen == 0) {
-    snprintf(buffer, buflen, "lib%s.so", fname);
-    retval = true;
-  } else if (strchr(pname, *os::path_separator()) != NULL) {
-    int n;
-    char** pelements = split_path(pname, &n);
-    if (pelements == NULL) {
-      return false;
-    }
-    for (int i = 0 ; i < n ; i++) {
-      // Really shouldn't be NULL, but check can't hurt
-      if (pelements[i] == NULL || strlen(pelements[i]) == 0) {
-        continue; // skip the empty path values
-      }
-      snprintf(buffer, buflen, "%s/lib%s.so", pelements[i], fname);
-      if (file_exists(buffer)) {
-        retval = true;
-        break;
-      }
-    }
-    // release the storage
-    for (int i = 0 ; i < n ; i++) {
-      if (pelements[i] != NULL) {
-        FREE_C_HEAP_ARRAY(char, pelements[i]);
-      }
-    }
-    if (pelements != NULL) {
-      FREE_C_HEAP_ARRAY(char*, pelements);
-    }
-  } else {
-    snprintf(buffer, buflen, "%s/lib%s.so", pname, fname);
-    retval = true;
-  }
-  return retval;
-}
 
 // check if addr is inside libjvm.so
 bool os::address_is_in_vm(address addr) {
@@ -1155,7 +1099,6 @@ void os::print_signal_handlers(outputStream* st, char* buf, size_t buflen) {
   print_signal_handler(st, SIGPIPE, buf, buflen);
   print_signal_handler(st, SIGXFSZ, buf, buflen);
   print_signal_handler(st, SIGILL , buf, buflen);
-  print_signal_handler(st, INTERRUPT_SIGNAL, buf, buflen);
   print_signal_handler(st, SR_signum, buf, buflen);
   print_signal_handler(st, SHUTDOWN1_SIGNAL, buf, buflen);
   print_signal_handler(st, SHUTDOWN2_SIGNAL , buf, buflen);
@@ -1272,7 +1215,7 @@ UserHandler(int sig, void *siginfo, void *context) {
 
   // Ctrl-C is pressed during error reporting, likely because the error
   // handler fails to abort. Let VM die immediately.
-  if (sig == SIGINT && is_error_reported()) {
+  if (sig == SIGINT && VMError::is_error_reported()) {
      os::die();
   }
 
@@ -1281,56 +1224,6 @@ UserHandler(int sig, void *siginfo, void *context) {
 
 void* os::user_handler() {
   return CAST_FROM_FN_PTR(void*, UserHandler);
-}
-
-class Semaphore : public StackObj {
-  public:
-    Semaphore();
-    ~Semaphore();
-    void signal();
-    void wait();
-    bool trywait();
-    bool timedwait(unsigned int sec, int nsec);
-  private:
-    sem_t _semaphore;
-};
-
-Semaphore::Semaphore() {
-  sem_init(&_semaphore, 0, 0);
-}
-
-Semaphore::~Semaphore() {
-  sem_destroy(&_semaphore);
-}
-
-void Semaphore::signal() {
-  sem_post(&_semaphore);
-}
-
-void Semaphore::wait() {
-  sem_wait(&_semaphore);
-}
-
-bool Semaphore::trywait() {
-  return sem_trywait(&_semaphore) == 0;
-}
-
-bool Semaphore::timedwait(unsigned int sec, int nsec) {
-  struct timespec ts;
-  unpackTime(&ts, false, (sec * NANOSECS_PER_SEC) + nsec);
-
-  while (1) {
-    int result = sem_timedwait(&_semaphore, &ts);
-    if (result == 0) {
-      return true;
-    } else if (errno == EINTR) {
-      continue;
-    } else if (errno == ETIMEDOUT) {
-      return false;
-    } else {
-      return false;
-    }
-  }
 }
 
 extern "C" {
@@ -1372,7 +1265,16 @@ static volatile jint pending_signals[NSIG+1] = { 0 };
 
 // Linux(POSIX) specific hand shaking semaphore.
 static sem_t sig_sem;
-static Semaphore sr_semaphore;
+static PosixSemaphore sr_semaphore;
+
+// Use POSIX implementation of semaphores.
+
+struct timespec PosixSemaphore::create_timespec(unsigned int sec, int nsec) {
+  struct timespec ts;
+  unpackTime(&ts, false, (sec * NANOSECS_PER_SEC) + nsec);
+
+  return ts;
+}
 
 void os::signal_init_pd() {
   // Initialize signal structures
@@ -1568,7 +1470,7 @@ bool os::pd_release_memory(char* addr, size_t size) {
 
 static bool haiku_mprotect(char* addr, size_t size, int prot) {
   // Linux wants the mprotect address argument to be page aligned.
-  char* bottom = (char*)align_size_down((intptr_t)addr, os::Haiku::page_size());
+  char* bottom = (char*)align_down((intptr_t)addr, os::Haiku::page_size());
 
   // According to SUSv3, mprotect() should only be used with mappings
   // established by mmap(), and mmap() always maps whole pages. Unaligned
@@ -1577,7 +1479,7 @@ static bool haiku_mprotect(char* addr, size_t size, int prot) {
   // caller if you hit this assert.
   assert(addr == bottom, "sanity check");
 
-  size = align_size_up(pointer_delta(addr, bottom, 1) + size, os::Haiku::page_size());
+  size = align_up(pointer_delta(addr, bottom, 1) + size, os::Haiku::page_size());
   return ::mprotect(bottom, size, prot) == 0;
 }
 
@@ -1628,6 +1530,17 @@ bool os::can_commit_large_page_memory() {
 
 bool os::can_execute_large_page_memory() {
   return false;
+}
+
+char* os::pd_attempt_reserve_memory_at(size_t bytes, char* requested_addr, int file_desc) {
+  assert(file_desc >= 0, "file_desc is not valid");
+  char* result = pd_attempt_reserve_memory_at(bytes, requested_addr);
+  if (result != NULL) {
+    if (replace_existing_mapping_with_file_mapping(result, bytes, file_desc) == NULL) {
+      vm_exit_during_initialization(err_msg("Error in mapping Java heap at the given filesystem directory"));
+    }
+  }
+  return result;
 }
 
 // Reserve memory at an arbitrary address, only if that area is
@@ -2329,7 +2242,7 @@ void os::run_periodic_checks() {
 #endif
 
   // ReduceSignalUsage allows the user to override these handlers
-  // see comments at the very top and jvm_solaris.h
+  // see comments at the very top and jvm_md.h
   if (!ReduceSignalUsage) {
     DO_SIGNAL_CHECK(SHUTDOWN1_SIGNAL);
     DO_SIGNAL_CHECK(SHUTDOWN2_SIGNAL);
@@ -2338,7 +2251,6 @@ void os::run_periodic_checks() {
   }
 
   DO_SIGNAL_CHECK(SR_signum);
-  DO_SIGNAL_CHECK(INTERRUPT_SIGNAL);
 }
 
 typedef int (*os_sigaction_t)(int, const struct sigaction *, struct sigaction *);
@@ -2382,10 +2294,6 @@ void os::Haiku::check_signal_handler(int sig) {
   case SHUTDOWN3_SIGNAL:
   case BREAK_SIGNAL:
     jvmHandler = (address)user_handler();
-    break;
-
-  case INTERRUPT_SIGNAL:
-    jvmHandler = CAST_FROM_FN_PTR(address, SIG_DFL);
     break;
 
   default:
@@ -2432,8 +2340,6 @@ void os::init(void) {
 
   init_random(1234567);
 
-  ThreadCritical::initialize();
-
   Haiku::set_page_size(sysconf(_SC_PAGESIZE));
   if (Haiku::page_size() == -1) {
     fatal(err_msg("os_linux.cpp: os::init: sysconf failed (%s)",
@@ -2447,6 +2353,8 @@ void os::init(void) {
   Haiku::_main_thread = pthread_self();
 
   initial_time_count = javaTimeNanos();
+
+  os::Posix::init();
 }
 
 // To install functions for atexit system call
@@ -2459,27 +2367,7 @@ extern "C" {
 // this is called _after_ the global arguments have been parsed
 jint os::init_2(void)
 {
-  // Allocate a single page and mark it as readable for safepoint polling
-  address polling_page = (address) ::mmap(NULL, Haiku::page_size(), PROT_READ, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-  guarantee( polling_page != MAP_FAILED, "os::init_2: failed to allocate polling page" );
-
-  os::set_polling_page( polling_page );
-
-#ifndef PRODUCT
-  if(Verbose && PrintMiscellaneous)
-    tty->print("[SafePoint Polling address: " INTPTR_FORMAT "]\n", (intptr_t)polling_page);
-#endif
-
-  if (!UseMembar) {
-    address mem_serialize_page = (address) ::mmap(NULL, Haiku::page_size(), PROT_READ | PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-    guarantee( mem_serialize_page != MAP_FAILED, "mmap Failed for memory serialize page");
-    os::set_memory_serialize_page( mem_serialize_page );
-
-#ifndef PRODUCT
-    if(Verbose && PrintMiscellaneous)
-      tty->print("[Memory Serialize  Page address: " INTPTR_FORMAT "]\n", (intptr_t)mem_serialize_page);
-#endif
-  }
+  os::Posix::init_2();
 
   // initialize suspend/resume support - must do this before signal_sets_init()
   if (SR_initialize() != 0) {
@@ -2576,44 +2464,6 @@ void os::SuspendedThreadTask::internal_do_task() {
     do_task(context);
     do_resume(_thread->osthread());
   }
-}
-
-class PcFetcher : public os::SuspendedThreadTask {
-public:
-  PcFetcher(Thread* thread) : os::SuspendedThreadTask(thread) {}
-  ExtendedPC result();
-protected:
-  void do_task(const os::SuspendedThreadTaskContext& context);
-private:
-  ExtendedPC _epc;
-};
-
-ExtendedPC PcFetcher::result() {
-  guarantee(is_done(), "task is not done yet.");
-  return _epc;
-}
-
-void PcFetcher::do_task(const os::SuspendedThreadTaskContext& context) {
-  Thread* thread = context.thread();
-  OSThread* osthread = thread->osthread();
-  if (osthread->ucontext() != NULL) {
-    _epc = os::Haiku::ucontext_get_pc((ucontext_t *) context.ucontext());
-  } else {
-    // NULL context is unexpected, double-check this is the VMThread
-    guarantee(thread->is_VM_thread(), "can only be called for VMThread");
-  }
-}
-
-// Suspends the target using the signal mechanism and then grabs the PC before
-// resuming the target. Used by the flat-profiler only
-ExtendedPC os::get_thread_pc(Thread* thread) {
-  // Make sure that it is called by the watcher for the VMThread
-  assert(Thread::current()->is_Watcher_thread(), "Must be watcher");
-  assert(thread->is_VM_thread(), "Can only be called for VMThread");
-
-  PcFetcher fetcher(thread);
-  fetcher.run();
-  return fetcher.result();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2864,11 +2714,6 @@ int os::available(int fd, jlong *bytes) {
   if (::fstat(fd, &buf) >= 0) {
     mode = buf.st_mode;
     if (S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
-      /*
-      * XXX: is the following call interruptible? If so, this might
-      * need to go through the INTERRUPT_IO() wrapper as for other
-      * blocking, interruptible calls in this file.
-      */
       int n;
       if (::ioctl(fd, FIONREAD, &n) >= 0) {
         *bytes = n;
@@ -3005,428 +2850,6 @@ void os::pause() {
   }
 }
 
-
-// Refer to the comments in os_solaris.cpp park-unpark.
-//
-// Beware -- Some versions of NPTL embody a flaw where pthread_cond_timedwait() can
-// hang indefinitely.  For instance NPTL 0.60 on 2.4.21-4ELsmp is vulnerable.
-// For specifics regarding the bug see GLIBC BUGID 261237 :
-//    http://www.mail-archive.com/debian-glibc@lists.debian.org/msg10837.html.
-// Briefly, pthread_cond_timedwait() calls with an expiry time that's not in the future
-// will either hang or corrupt the condvar, resulting in subsequent hangs if the condvar
-// is used.  (The simple C test-case provided in the GLIBC bug report manifests the
-// hang).  The JVM is vulernable via sleep(), Object.wait(timo), LockSupport.parkNanos()
-// and monitorenter when we're using 1-0 locking.  All those operations may result in
-// calls to pthread_cond_timedwait().  Using LD_ASSUME_KERNEL to use an older version
-// of libpthread avoids the problem, but isn't practical.
-//
-// Possible remedies:
-//
-// 1.   Establish a minimum relative wait time.  50 to 100 msecs seems to work.
-//      This is palliative and probabilistic, however.  If the thread is preempted
-//      between the call to compute_abstime() and pthread_cond_timedwait(), more
-//      than the minimum period may have passed, and the abstime may be stale (in the
-//      past) resultin in a hang.   Using this technique reduces the odds of a hang
-//      but the JVM is still vulnerable, particularly on heavily loaded systems.
-//
-// 2.   Modify park-unpark to use per-thread (per ParkEvent) pipe-pairs instead
-//      of the usual flag-condvar-mutex idiom.  The write side of the pipe is set
-//      NDELAY. unpark() reduces to write(), park() reduces to read() and park(timo)
-//      reduces to poll()+read().  This works well, but consumes 2 FDs per extant
-//      thread.
-//
-// 3.   Embargo pthread_cond_timedwait() and implement a native "chron" thread
-//      that manages timeouts.  We'd emulate pthread_cond_timedwait() by enqueuing
-//      a timeout request to the chron thread and then blocking via pthread_cond_wait().
-//      This also works well.  In fact it avoids kernel-level scalability impediments
-//      on certain platforms that don't handle lots of active pthread_cond_timedwait()
-//      timers in a graceful fashion.
-//
-// 4.   When the abstime value is in the past it appears that control returns
-//      correctly from pthread_cond_timedwait(), but the condvar is left corrupt.
-//      Subsequent timedwait/wait calls may hang indefinitely.  Given that, we
-//      can avoid the problem by reinitializing the condvar -- by cond_destroy()
-//      followed by cond_init() -- after all calls to pthread_cond_timedwait().
-//      It may be possible to avoid reinitialization by checking the return
-//      value from pthread_cond_timedwait().  In addition to reinitializing the
-//      condvar we must establish the invariant that cond_signal() is only called
-//      within critical sections protected by the adjunct mutex.  This prevents
-//      cond_signal() from "seeing" a condvar that's in the midst of being
-//      reinitialized or that is corrupt.  Sadly, this invariant obviates the
-//      desirable signal-after-unlock optimization that avoids futile context switching.
-//
-//      I'm also concerned that some versions of NTPL might allocate an auxilliary
-//      structure when a condvar is used or initialized.  cond_destroy()  would
-//      release the helper structure.  Our reinitialize-after-timedwait fix
-//      put excessive stress on malloc/free and locks protecting the c-heap.
-//
-// We currently use (4).  See the WorkAroundNTPLTimedWaitHang flag.
-// It may be possible to refine (4) by checking the kernel and NTPL verisons
-// and only enabling the work-around for vulnerable environments.
-
-// utility to compute the abstime argument to timedwait:
-// millis is the relative timeout time
-// abstime will be the absolute timeout time
-// TODO: replace compute_abstime() with unpackTime()
-
-static struct timespec* compute_abstime(struct timespec* abstime, jlong millis) {
-  if (millis < 0)  millis = 0;
-  struct timeval now;
-  int status = gettimeofday(&now, NULL);
-  assert(status == 0, "gettimeofday");
-  jlong seconds = millis / 1000;
-  millis %= 1000;
-  if (seconds > 50000000) { // see man cond_timedwait(3T)
-    seconds = 50000000;
-  }
-  abstime->tv_sec = now.tv_sec  + seconds;
-  long       usec = now.tv_usec + millis * 1000;
-  if (usec >= 1000000) {
-    abstime->tv_sec += 1;
-    usec -= 1000000;
-  }
-  abstime->tv_nsec = usec * 1000;
-  return abstime;
-}
-
-
-// Test-and-clear _Event, always leaves _Event set to 0, returns immediately.
-// Conceptually TryPark() should be equivalent to park(0).
-
-int os::PlatformEvent::TryPark() {
-  for (;;) {
-    const int v = _Event ;
-    guarantee ((v == 0) || (v == 1), "invariant") ;
-    if (Atomic::cmpxchg (0, &_Event, v) == v) return v  ;
-  }
-}
-
-void os::PlatformEvent::park() {       // AKA "down()"
-  // Transitions for _Event:
-  //   -1 => -1 : illegal
-  //    1 =>  0 : pass - return immediately
-  //    0 => -1 : block; then set _Event to 0 before returning
-
-  // Invariant: Only the thread associated with the Event/PlatformEvent
-  // may call park().
-  // TODO: assert that _Assoc != NULL or _Assoc == Self
-  assert(_nParked == 0, "invariant");
-
-  int v;
-  for (;;) {
-    v = _Event;
-    if (Atomic::cmpxchg(v-1, &_Event, v) == v) break;
-  }
-  guarantee(v >= 0, "invariant");
-  if (v == 0) {
-    // Do this the hard way by blocking ...
-    int status = pthread_mutex_lock(_mutex);
-    assert_status(status == 0, status, "mutex_lock");
-    guarantee(_nParked == 0, "invariant");
-    ++_nParked;
-    while (_Event < 0) {
-      status = pthread_cond_wait(_cond, _mutex);
-      // for some reason, under 2.7 lwp_cond_wait() may return ETIME ...
-      // Treat this the same as if the wait was interrupted
-      if (status == ETIME) { status = EINTR; }
-      assert_status(status == 0 || status == EINTR, status, "cond_wait");
-    }
-    --_nParked;
-
-    _Event = 0;
-    status = pthread_mutex_unlock(_mutex);
-    assert_status(status == 0, status, "mutex_unlock");
-    // Paranoia to ensure our locked and lock-free paths interact
-    // correctly with each other.
-    OrderAccess::fence();
-  }
-  guarantee(_Event >= 0, "invariant");
-}
-
-int os::PlatformEvent::park(jlong millis) {
-  // Transitions for _Event:
-  //   -1 => -1 : illegal
-  //    1 =>  0 : pass - return immediately
-  //    0 => -1 : block; then set _Event to 0 before returning
-
-  guarantee(_nParked == 0, "invariant");
-
-  int v;
-  for (;;) {
-    v = _Event;
-    if (Atomic::cmpxchg(v-1, &_Event, v) == v) break;
-  }
-  guarantee(v >= 0, "invariant");
-  if (v != 0) return OS_OK;
-
-  // We do this the hard way, by blocking the thread.
-  // Consider enforcing a minimum timeout value.
-  struct timespec abst;
-  compute_abstime(&abst, millis);
-
-  int ret = OS_TIMEOUT;
-  int status = pthread_mutex_lock(_mutex);
-  assert_status(status == 0, status, "mutex_lock");
-  guarantee(_nParked == 0, "invariant");
-  ++_nParked;
-
-  // Object.wait(timo) will return because of
-  // (a) notification
-  // (b) timeout
-  // (c) thread.interrupt
-  //
-  // Thread.interrupt and object.notify{All} both call Event::set.
-  // That is, we treat thread.interrupt as a special case of notification.
-  // We ignore spurious OS wakeups unless FilterSpuriousWakeups is false.
-  // We assume all ETIME returns are valid.
-  //
-  // TODO: properly differentiate simultaneous notify+interrupt.
-  // In that case, we should propagate the notify to another waiter.
-
-  while (_Event < 0) {
-    status = pthread_cond_timedwait(_cond, _mutex, &abst);
-    assert_status(status == 0 || status == EINTR ||
-                  status == ETIME || status == ETIMEDOUT,
-                  status, "cond_timedwait");
-    if (!FilterSpuriousWakeups) break;                 // previous semantics
-    if (status == ETIME || status == ETIMEDOUT) break;
-    // We consume and ignore EINTR and spurious wakeups.
-  }
-  --_nParked;
-  if (_Event >= 0) {
-    ret = OS_OK;
-  }
-  _Event = 0;
-  status = pthread_mutex_unlock(_mutex);
-  assert_status(status == 0, status, "mutex_unlock");
-  assert(_nParked == 0, "invariant");
-  // Paranoia to ensure our locked and lock-free paths interact
-  // correctly with each other.
-  OrderAccess::fence();
-  return ret;
-}
-
-void os::PlatformEvent::unpark() {
-  // Transitions for _Event:
-  //    0 => 1 : just return
-  //    1 => 1 : just return
-  //   -1 => either 0 or 1; must signal target thread
-  //         That is, we can safely transition _Event from -1 to either
-  //         0 or 1.
-  // See also: "Semaphores in Plan 9" by Mullender & Cox
-  //
-  // Note: Forcing a transition from "-1" to "1" on an unpark() means
-  // that it will take two back-to-back park() calls for the owning
-  // thread to block. This has the benefit of forcing a spurious return
-  // from the first park() call after an unpark() call which will help
-  // shake out uses of park() and unpark() without condition variables.
-
-  if (Atomic::xchg(1, &_Event) >= 0) return;
-
-  // Wait for the thread associated with the event to vacate
-  int status = pthread_mutex_lock(_mutex);
-  assert_status(status == 0, status, "mutex_lock");
-  int AnyWaiters = _nParked;
-  assert(AnyWaiters == 0 || AnyWaiters == 1, "invariant");
-  status = pthread_mutex_unlock(_mutex);
-  assert_status(status == 0, status, "mutex_unlock");
-  if (AnyWaiters != 0) {
-    // Note that we signal() *after* dropping the lock for "immortal" Events.
-    // This is safe and avoids a common class of  futile wakeups.  In rare
-    // circumstances this can cause a thread to return prematurely from
-    // cond_{timed}wait() but the spurious wakeup is benign and the victim
-    // will simply re-test the condition and re-park itself.
-    // This provides particular benefit if the underlying platform does not
-    // provide wait morphing.
-    status = pthread_cond_signal(_cond);
-    assert_status(status == 0, status, "cond_signal");
-  }
-}
-
-
-// JSR166
-// -------------------------------------------------------
-
-/*
- * The solaris and linux implementations of park/unpark are fairly
- * conservative for now, but can be improved. They currently use a
- * mutex/condvar pair, plus a a count.
- * Park decrements count if > 0, else does a condvar wait.  Unpark
- * sets count to 1 and signals condvar.  Only one thread ever waits
- * on the condvar. Contention seen when trying to park implies that someone
- * is unparking you, so don't wait. And spurious returns are fine, so there
- * is no need to track notifications.
- */
-
-/*
- * This code is common to linux and solaris and will be moved to a
- * common place in dolphin.
- *
- * The passed in time value is either a relative time in nanoseconds
- * or an absolute time in milliseconds. Either way it has to be unpacked
- * into suitable seconds and nanoseconds components and stored in the
- * given timespec structure.
- * Given time is a 64-bit value and the time_t used in the timespec is only
- * a signed-32-bit value (except on 64-bit Linux) we have to watch for
- * overflow if times way in the future are given. Further on Solaris versions
- * prior to 10 there is a restriction (see cond_timedwait) that the specified
- * number of seconds, in abstime, is less than current_time  + 100,000,000.
- * As it will be 28 years before "now + 100000000" will overflow we can
- * ignore overflow and just impose a hard-limit on seconds using the value
- * of "now + 100,000,000". This places a limit on the timeout of about 3.17
- * years from "now".
- */
-
-static void unpackTime(struct timespec* absTime, bool isAbsolute, jlong time) {
-  assert (time > 0, "convertTime");
-
-  struct timeval now;
-  int status = gettimeofday(&now, NULL);
-  assert(status == 0, "gettimeofday");
-
-  time_t max_secs = now.tv_sec + MAX_SECS;
-
-  if (isAbsolute) {
-    jlong secs = time / 1000;
-    if (secs > max_secs) {
-      absTime->tv_sec = max_secs;
-    }
-    else {
-      absTime->tv_sec = secs;
-    }
-    absTime->tv_nsec = (time % 1000) * NANOSECS_PER_MILLISEC;
-  }
-  else {
-    jlong secs = time / NANOSECS_PER_SEC;
-    if (secs >= MAX_SECS) {
-      absTime->tv_sec = max_secs;
-      absTime->tv_nsec = 0;
-    }
-    else {
-      absTime->tv_sec = now.tv_sec + secs;
-      absTime->tv_nsec = (time % NANOSECS_PER_SEC) + now.tv_usec*1000;
-      if (absTime->tv_nsec >= NANOSECS_PER_SEC) {
-        absTime->tv_nsec -= NANOSECS_PER_SEC;
-        ++absTime->tv_sec; // note: this must be <= max_secs
-      }
-    }
-  }
-  assert(absTime->tv_sec >= 0, "tv_sec < 0");
-  assert(absTime->tv_sec <= max_secs, "tv_sec > max_secs");
-  assert(absTime->tv_nsec >= 0, "tv_nsec < 0");
-  assert(absTime->tv_nsec < NANOSECS_PER_SEC, "tv_nsec >= nanos_per_sec");
-}
-
-void Parker::park(bool isAbsolute, jlong time) {
-  // Ideally we'd do something useful while spinning, such
-  // as calling unpackTime().
-
-  // Optional fast-path check:
-  // Return immediately if a permit is available.
-  // We depend on Atomic::xchg() having full barrier semantics
-  // since we are doing a lock-free update to _counter.
-  if (Atomic::xchg(0, &_counter) > 0) return;
-
-  Thread* thread = Thread::current();
-  assert(thread->is_Java_thread(), "Must be JavaThread");
-  JavaThread *jt = (JavaThread *)thread;
-
-  // Optional optimization -- avoid state transitions if there's an interrupt pending.
-  // Check interrupt before trying to wait
-  if (Thread::is_interrupted(thread, false)) {
-    return;
-  }
-
-  // Next, demultiplex/decode time arguments
-  timespec absTime;
-  if (time < 0 || (isAbsolute && time == 0) ) { // don't wait at all
-    return;
-  }
-  if (time > 0) {
-    unpackTime(&absTime, isAbsolute, time);
-  }
-
-
-  // Enter safepoint region
-  // Beware of deadlocks such as 6317397.
-  // The per-thread Parker:: mutex is a classic leaf-lock.
-  // In particular a thread must never block on the Threads_lock while
-  // holding the Parker:: mutex.  If safepoints are pending both the
-  // the ThreadBlockInVM() CTOR and DTOR may grab Threads_lock.
-  ThreadBlockInVM tbivm(jt);
-
-  // Don't wait if cannot get lock since interference arises from
-  // unblocking.  Also. check interrupt before trying wait
-  if (Thread::is_interrupted(thread, false) || pthread_mutex_trylock(_mutex) != 0) {
-    return;
-  }
-
-  int status ;
-  if (_counter > 0)  { // no wait needed
-    _counter = 0;
-    status = pthread_mutex_unlock(_mutex);
-    assert (status == 0, "invariant") ;
-    // Paranoia to ensure our locked and lock-free paths interact
-    // correctly with each other and Java-level accesses.
-    OrderAccess::fence();
-    return;
-  }
-
-#ifdef ASSERT
-  // Don't catch signals while blocked; let the running threads have the signals.
-  // (This allows a debugger to break into the running thread.)
-  sigset_t oldsigs;
-  sigset_t* allowdebug_blocked = os::Linux::allowdebug_blocked_signals();
-  pthread_sigmask(SIG_BLOCK, allowdebug_blocked, &oldsigs);
-#endif
-
-  OSThreadWaitState osts(thread->osthread(), false /* not Object.wait() */);
-  jt->set_suspend_equivalent();
-  // cleared by handle_special_suspend_equivalent_condition() or java_suspend_self()
-
-  if (time == 0) {
-    status = pthread_cond_wait (_cond, _mutex) ;
-  } else {
-    status = pthread_cond_timedwait (_cond, _mutex, &absTime) ;
-  }
-
-  assert_status(status == 0 || status == EINTR ||
-                status == ETIME || status == ETIMEDOUT,
-                status, "cond_timedwait");
-
-#ifdef ASSERT
-  pthread_sigmask(SIG_SETMASK, &oldsigs, NULL);
-#endif
-
-  _counter = 0 ;
-  status = pthread_mutex_unlock(_mutex) ;
-  assert_status(status == 0, status, "invariant") ;
-  // Paranoia to ensure our locked and lock-free paths interact
-  // correctly with each other and Java-level accesses.
-  OrderAccess::fence();
-
-  // If externally suspended while waiting, re-suspend
-  if (jt->handle_special_suspend_equivalent_condition()) {
-    jt->java_suspend_self();
-  }
-}
-
-void Parker::unpark() {
-  int s, status ;
-  status = pthread_mutex_lock(_mutex);
-  assert (status == 0, "invariant") ;
-  s = _counter;
-  _counter = 1;
-  status = pthread_mutex_unlock(_mutex);
-  assert (status == 0, "invariant") ;
-
-  if (s < 1) {
-    status = pthread_cond_signal (_cond) ;
-    assert (status == 0, "invariant") ;
-  }
-}
-
-
 extern char** environ;
 
 // Run the specified command in a separate process. Return its exit value,
@@ -3537,4 +2960,72 @@ bool os::start_debugging(char *buf, int buflen) {
     yes = false;
   }
   return yes;
+}
+
+// JSR166
+// -------------------------------------------------------
+
+// The solaris and linux implementations of park/unpark are fairly
+// conservative for now, but can be improved. They currently use a
+// mutex/condvar pair, plus _counter.
+// Park decrements _counter if > 0, else does a condvar wait.  Unpark
+// sets count to 1 and signals condvar.  Only one thread ever waits
+// on the condvar. Contention seen when trying to park implies that someone
+// is unparking you, so don't wait. And spurious returns are fine, so there
+// is no need to track notifications.
+
+#define MAX_SECS 100000000
+
+// This code is common to linux and solaris and will be moved to a
+// common place in dolphin.
+//
+// The passed in time value is either a relative time in nanoseconds
+// or an absolute time in milliseconds. Either way it has to be unpacked
+// into suitable seconds and nanoseconds components and stored in the
+// given timespec structure.
+// Given time is a 64-bit value and the time_t used in the timespec is only
+// a signed-32-bit value (except on 64-bit Linux) we have to watch for
+// overflow if times way in the future are given. Further on Solaris versions
+// prior to 10 there is a restriction (see cond_timedwait) that the specified
+// number of seconds, in abstime, is less than current_time  + 100,000,000.
+// As it will be 28 years before "now + 100000000" will overflow we can
+// ignore overflow and just impose a hard-limit on seconds using the value
+// of "now + 100,000,000". This places a limit on the timeout of about 3.17
+// years from "now".
+//
+static void unpackTime(timespec* absTime, bool isAbsolute, jlong time) {
+  assert(time > 0, "convertTime");
+
+  struct timeval now;
+  int status = gettimeofday(&now, NULL);
+  assert(status == 0, "gettimeofday");
+
+  time_t max_secs = now.tv_sec + MAX_SECS;
+
+  if (isAbsolute) {
+    jlong secs = time / 1000;
+    if (secs > max_secs) {
+      absTime->tv_sec = max_secs;
+    } else {
+      absTime->tv_sec = secs;
+    }
+    absTime->tv_nsec = (time % 1000) * NANOSECS_PER_MILLISEC;
+  } else {
+    jlong secs = time / NANOSECS_PER_SEC;
+    if (secs >= MAX_SECS) {
+      absTime->tv_sec = max_secs;
+      absTime->tv_nsec = 0;
+    } else {
+      absTime->tv_sec = now.tv_sec + secs;
+      absTime->tv_nsec = (time % NANOSECS_PER_SEC) + now.tv_usec*1000;
+      if (absTime->tv_nsec >= NANOSECS_PER_SEC) {
+        absTime->tv_nsec -= NANOSECS_PER_SEC;
+        ++absTime->tv_sec; // note: this must be <= max_secs
+      }
+    }
+  }
+  assert(absTime->tv_sec >= 0, "tv_sec < 0");
+  assert(absTime->tv_sec <= max_secs, "tv_sec > max_secs");
+  assert(absTime->tv_nsec >= 0, "tv_nsec < 0");
+  assert(absTime->tv_nsec < NANOSECS_PER_SEC, "tv_nsec >= nanos_per_sec");
 }
